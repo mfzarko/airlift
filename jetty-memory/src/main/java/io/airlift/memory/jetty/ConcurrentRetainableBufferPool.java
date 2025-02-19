@@ -175,6 +175,7 @@ public class ConcurrentRetainableBufferPool
             if (poolSizeShift >= pools.size()) {
                 addNewPools(poolSizeShift);
             }
+            // for avoiding pool size 32K (shift 8) please see https://bugs.openjdk.org/browse/JDK-8333849 which will be fixed in JDK 24
             return pools.get(poolSizeShift).allocate((offHeap && (poolSizeShift == 8)) ? autoArena : sharedArena);
         }
 
