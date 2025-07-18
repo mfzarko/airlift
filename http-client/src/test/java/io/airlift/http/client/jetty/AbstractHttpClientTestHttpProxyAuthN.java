@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 
+import static io.airlift.http.client.HttpClientConfig.ClientImplementation.NETTY;
 import static io.airlift.http.client.HttpStatus.PROXY_AUTHENTIATION_REQUIRED;
 import static jakarta.servlet.http.HttpServletResponse.SC_FORBIDDEN;
 import static org.eclipse.jetty.http.HttpHeader.PROXY_AUTHENTICATE;
@@ -47,7 +48,8 @@ public abstract class AbstractHttpClientTestHttpProxyAuthN
     {
         return new HttpClientConfig()
                 .setHttpProxyUser(proxyUser)
-                .setHttpProxyPassword(proxyPass);
+                .setHttpProxyPassword(proxyPass)
+                .setClientImplementation(NETTY);
     }
 
     @Override

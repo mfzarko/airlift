@@ -1,6 +1,7 @@
 package io.airlift.http.client.jetty;
 
 import io.airlift.http.client.AbstractHttpClientTest;
+import io.airlift.http.client.HttpClient;
 import io.airlift.http.client.HttpClientConfig;
 import io.airlift.http.client.Request;
 import io.airlift.http.client.ResponseHandler;
@@ -42,7 +43,7 @@ public class TestJettyHttpsClient
         HttpClientConfig config = createClientConfig();
         addKeystore(config);
 
-        JettyHttpClient client = server.createClient(config);
+        HttpClient client = server.createClient(config);
         return Optional.of(new TestingStreamingResponse(() -> client.executeStreaming(request), client));
     }
 
@@ -59,7 +60,7 @@ public class TestJettyHttpsClient
     {
         addKeystore(config);
 
-        try (JettyHttpClient client = server.createClient(config)) {
+        try (HttpClient client = server.createClient(config)) {
             return client.execute(request, responseHandler);
         }
     }

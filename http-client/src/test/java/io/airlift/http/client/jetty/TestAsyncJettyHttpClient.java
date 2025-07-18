@@ -1,6 +1,7 @@
 package io.airlift.http.client.jetty;
 
 import io.airlift.http.client.AbstractHttpClientTest;
+import io.airlift.http.client.HttpClient;
 import io.airlift.http.client.HttpClientConfig;
 import io.airlift.http.client.Request;
 import io.airlift.http.client.ResponseHandler;
@@ -45,7 +46,7 @@ public class TestAsyncJettyHttpClient
     public <T, E extends Exception> T executeRequest(CloseableTestHttpServer server, HttpClientConfig config, Request request, ResponseHandler<T, E> responseHandler)
             throws Exception
     {
-        try (JettyHttpClient client = server.createClient(config)) {
+        try (HttpClient client = server.createClient(config)) {
             return executeAsync(client, request, responseHandler);
         }
     }

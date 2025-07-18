@@ -1,6 +1,7 @@
 package io.airlift.http.client.jetty;
 
 import io.airlift.http.client.AbstractHttpClientTest;
+import io.airlift.http.client.HttpClient;
 import io.airlift.http.client.HttpClientConfig;
 import io.airlift.http.client.Request;
 import io.airlift.http.client.ResponseHandler;
@@ -11,6 +12,8 @@ import org.junit.jupiter.api.Timeout;
 
 import java.util.Optional;
 
+import static io.airlift.http.client.HttpClientConfig.ClientImplementation.NETTY;
+
 public class TestJettyHttpClientSocksProxy
         extends AbstractHttpClientTest
 {
@@ -18,7 +21,8 @@ public class TestJettyHttpClientSocksProxy
     protected HttpClientConfig createClientConfig()
     {
         return new HttpClientConfig()
-                .setHttp2Enabled(false);
+                .setHttp2Enabled(false)
+                .setClientImplementation(NETTY);
     }
 
     @Override
@@ -26,7 +30,7 @@ public class TestJettyHttpClientSocksProxy
             throws Exception
     {
         TestingSocksProxy testingSocksProxy = new TestingSocksProxy().start();
-        JettyHttpClient client = server.createClient(createClientConfig().setSocksProxy(testingSocksProxy.getHostAndPort()));
+        HttpClient client = server.createClient(createClientConfig().setSocksProxy(testingSocksProxy.getHostAndPort()));
         return Optional.of(new TestingStreamingResponse(() -> client.executeStreaming(request), testingSocksProxy, client));
     }
 
@@ -41,7 +45,7 @@ public class TestJettyHttpClientSocksProxy
     public <T, E extends Exception> T executeRequest(CloseableTestHttpServer server, HttpClientConfig config, Request request, ResponseHandler<T, E> responseHandler)
             throws Exception
     {
-        try (TestingSocksProxy testingSocksProxy = new TestingSocksProxy().start(); JettyHttpClient client = server.createClient(config.setSocksProxy(testingSocksProxy.getHostAndPort()))) {
+        try (TestingSocksProxy testingSocksProxy = new TestingSocksProxy().start(); HttpClient client = server.createClient(config.setSocksProxy(testingSocksProxy.getHostAndPort()))) {
             return client.execute(request, responseHandler);
         }
     }

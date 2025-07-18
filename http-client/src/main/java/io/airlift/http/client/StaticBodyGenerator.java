@@ -42,4 +42,9 @@ public sealed class StaticBodyGenerator
     {
         return body;
     }
+
+    public int getLength()
+    {
+        return body.length;
+    }
 }

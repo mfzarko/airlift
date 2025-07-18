@@ -14,6 +14,7 @@
 package io.airlift.http.client.jetty;
 
 import io.airlift.http.client.AbstractHttpClientTest;
+import io.airlift.http.client.HttpClient;
 import io.airlift.http.client.HttpClientConfig;
 import io.airlift.http.client.Request;
 import io.airlift.http.client.Response;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.Timeout;
 import java.io.IOException;
 import java.util.Optional;
 
+import static io.airlift.http.client.HttpClientConfig.ClientImplementation.NETTY;
 import static io.airlift.http.client.HttpStatus.BAD_GATEWAY;
 import static io.airlift.http.client.HttpStatus.BAD_REQUEST;
 import static java.util.Objects.requireNonNull;
@@ -43,7 +45,7 @@ public abstract class AbstractHttpClientTestHttpProxy
     @Override
     public HttpClientConfig createClientConfig()
     {
-        return new HttpClientConfig();
+        return new HttpClientConfig().setClientImplementation(NETTY);
     }
 
     @Override
@@ -65,7 +67,7 @@ public abstract class AbstractHttpClientTestHttpProxy
     {
         HttpClientConfig config = createClientConfig();
         TestingHttpProxy testingHttpProxy = new TestingHttpProxy(keystore);
-        JettyHttpClient client = server.createClient(config.setHttpProxy(testingHttpProxy.getHostAndPort()));
+        HttpClient client = server.createClient(config.setHttpProxy(testingHttpProxy.getHostAndPort()));
 
         TestingStreamingResponse streamingResponse = new TestingStreamingResponse(() -> client.executeStreaming(request), testingHttpProxy, client);
         if ((streamingResponse.getStatusCode() == BAD_GATEWAY.code()) || (streamingResponse.getStatusCode() == BAD_REQUEST.code())) {
@@ -85,7 +87,7 @@ public abstract class AbstractHttpClientTestHttpProxy
     public <T, E extends Exception> T executeRequest(CloseableTestHttpServer server, HttpClientConfig config, Request request, ResponseHandler<T, E> responseHandler)
             throws Exception
     {
-        try (TestingHttpProxy testingHttpProxy = createTestingHttpProxy(); JettyHttpClient client = server.createClient(config.setHttpProxy(testingHttpProxy.getHostAndPort()))) {
+        try (TestingHttpProxy testingHttpProxy = createTestingHttpProxy(); HttpClient client = server.createClient(config.setHttpProxy(testingHttpProxy.getHostAndPort()))) {
             return client.execute(request, new ProxyResponseHandler<>(responseHandler));
         }
     }

@@ -27,7 +27,9 @@ import com.google.inject.Scopes;
 import com.google.inject.TypeLiteral;
 import io.airlift.configuration.ConfigDefaults;
 import io.airlift.http.client.jetty.JettyHttpClient;
+import io.airlift.http.client.netty.NettyHttpClient;
 import io.airlift.node.NodeInfo;
+import io.netty.handler.ssl.SslContext;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.api.trace.TracerProvider;
@@ -141,10 +143,6 @@ public class HttpClientModule
         {
             HttpClientConfig config = injector.getInstance(Key.get(HttpClientConfig.class, annotation));
             Optional<String> environment = Optional.ofNullable(nodeInfo).map(NodeInfo::getEnvironment);
-            Optional<SslContextFactory.Client> sslContextFactoryAnnotated = injector.getInstance(Key.get(new TypeLiteral<>() {}, annotation));
-            Optional<SslContextFactory.Client> sslContextFactoryGlobal = injector.getInstance(Key.get(new TypeLiteral<>() {}));
-            Optional<SslContextFactory.Client> sslContextFactory = sslContextFactoryAnnotated.or(() -> sslContextFactoryGlobal);
-            Optional<ByteBufferPool> byteBufferPool = injector.getInstance(Key.get(new TypeLiteral<>() {}));
 
             Set<HttpRequestFilter> filters = ImmutableSet.<HttpRequestFilter>builder()
                     .addAll(injector.getInstance(Key.get(new TypeLiteral<Set<HttpRequestFilter>>() {}, GlobalFilter.class)))
@@ -156,7 +154,21 @@ public class HttpClientModule
                     .addAll(injector.getInstance(Key.get(new TypeLiteral<Set<HttpStatusListener>>() {}, annotation)))
                     .build();
 
-            return new JettyHttpClient(name, config, ImmutableList.copyOf(filters), openTelemetry, tracer, environment, sslContextFactory, byteBufferPool, httpStatusListeners);
+            return switch (config.getClientImplementation()) {
+                case JETTY -> {
+                    Optional<ByteBufferPool> byteBufferPool = injector.getInstance(Key.get(new TypeLiteral<>() {}));
+                    Optional<SslContextFactory.Client> sslContextFactoryAnnotated = injector.getInstance(Key.get(new TypeLiteral<>() {}, annotation));
+                    Optional<SslContextFactory.Client> sslContextFactoryGlobal = injector.getInstance(Key.get(new TypeLiteral<>() {}));
+                    Optional<SslContextFactory.Client> sslContextFactory = sslContextFactoryAnnotated.or(() -> sslContextFactoryGlobal);
+                    yield new JettyHttpClient(name, config, ImmutableList.copyOf(filters), openTelemetry, tracer, environment, sslContextFactory, byteBufferPool, httpStatusListeners);
+                }
+                case NETTY -> {
+                    Optional<SslContext> sslContextFactoryAnnotated = injector.getInstance(Key.get(new TypeLiteral<>() {}, annotation));
+                    Optional<SslContext> sslContextFactoryGlobal = injector.getInstance(Key.get(new TypeLiteral<>() {}));
+                    Optional<SslContext> sslContextFactory = sslContextFactoryAnnotated.or(() -> sslContextFactoryGlobal);
+                    yield new NettyHttpClient(name, config, ImmutableList.copyOf(filters), openTelemetry, tracer, environment, sslContextFactory, httpStatusListeners);
+                }
+            };
         }
     }
 }

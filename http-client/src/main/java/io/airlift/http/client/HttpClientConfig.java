@@ -93,6 +93,7 @@ public class HttpClientConfig
     private Optional<Duration> tcpKeepAliveIdleTime = Optional.empty();
     private boolean strictEventOrdering;
     private boolean useVirtualThreads;
+    private ClientImplementation clientImplementation = ClientImplementation.NETTY;
 
     /**
      * This property is initialized with Jetty's default excluded ciphers list.
@@ -761,6 +762,19 @@ public class HttpClientConfig
         return this;
     }
 
+    public ClientImplementation getClientImplementation()
+    {
+        return clientImplementation;
+    }
+
+    @ConfigHidden
+    @Config("http-client.implementation")
+    public HttpClientConfig setClientImplementation(ClientImplementation clientImplementation)
+    {
+        this.clientImplementation = clientImplementation;
+        return this;
+    }
+
     @AssertTrue(message = "either both http-client.max-heap-memory and http-client.max-direct-memory are set or none of them")
     public boolean eitherBothMemorySettingsAreSetOrNone()
     {
@@ -795,5 +809,12 @@ public class HttpClientConfig
         DEFAULT,
         FFM,
         UNSAFE;
+    }
+
+    public enum ClientImplementation
+    {
+        JETTY,
+        NETTY
+        /**/;
     }
 }
