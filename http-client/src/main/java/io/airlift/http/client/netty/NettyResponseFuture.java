@@ -4,19 +4,28 @@ import com.google.common.util.concurrent.AbstractFuture;
 import io.airlift.http.client.HttpClient;
 import io.netty.handler.timeout.TimeoutException;
 
+import java.net.URI;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static com.google.common.base.MoreObjects.toStringHelper;
 import static io.airlift.http.client.netty.NettyResponseFuture.NettyAsyncHttpState.CANCELED;
 import static io.airlift.http.client.netty.NettyResponseFuture.NettyAsyncHttpState.DONE;
 import static io.airlift.http.client.netty.NettyResponseFuture.NettyAsyncHttpState.FAILED;
 import static io.airlift.http.client.netty.NettyResponseFuture.NettyAsyncHttpState.TIMEOUT;
+import static java.util.Objects.requireNonNull;
 
 public class NettyResponseFuture<T, E extends Exception>
         extends AbstractFuture<T>
         implements HttpClient.HttpResponseFuture<T>
 {
+    private final URI baseUri;
     private final AtomicReference<NettyAsyncHttpState> state = new AtomicReference<>(NettyAsyncHttpState.WAITING_FOR_CONNECTION);
+
+    public NettyResponseFuture(URI uri)
+    {
+        this.baseUri = requireNonNull(uri, "uri isnull");
+    }
 
     enum NettyAsyncHttpState
     {
@@ -58,5 +67,14 @@ public class NettyResponseFuture<T, E extends Exception>
         }
         setState(FAILED);
         return super.setException(exception);
+    }
+
+    @Override
+    public String toString()
+    {
+        return toStringHelper(this)
+                .add("uri", baseUri)
+                .add("state", state.get())
+                .toString();
     }
 }

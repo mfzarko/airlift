@@ -18,6 +18,7 @@ import io.airlift.http.client.jetty.FailedHttpResponseFuture;
 import io.airlift.security.pem.PemReader;
 import io.airlift.units.Duration;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.nio.NioIoHandler;
@@ -41,13 +42,14 @@ import io.opentelemetry.semconv.HttpAttributes;
 import io.opentelemetry.semconv.NetworkAttributes;
 import io.opentelemetry.semconv.ServerAttributes;
 import io.opentelemetry.semconv.UrlAttributes;
+import io.opentelemetry.semconv.incubating.HttpIncubatingAttributes;
 import org.reactivestreams.Publisher;
 import org.weakref.jmx.Flatten;
 import org.weakref.jmx.Managed;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.netty.ByteBufFlux;
+import reactor.netty.ByteBufMono;
 import reactor.netty.http.HttpProtocol;
 import reactor.netty.http.client.HttpClient;
 import reactor.netty.http.client.HttpClientRequest;
@@ -85,9 +87,12 @@ import static com.google.common.net.HttpHeaders.CONTENT_LENGTH;
 import static com.google.common.net.InetAddresses.isInetAddress;
 import static com.google.common.util.concurrent.Futures.addCallback;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
+import static io.airlift.concurrent.Threads.daemonThreadsNamed;
+import static io.airlift.http.client.netty.NettyHttpClient.HttpClientBuilder.httpClientBuilder;
 import static io.airlift.http.client.netty.NettyResponseFuture.NettyAsyncHttpState.CONNECTED;
 import static io.airlift.http.client.netty.NettyResponseFuture.NettyAsyncHttpState.PROCESSING_RESPONSE;
 import static io.netty.buffer.Unpooled.wrappedBuffer;
+import static io.netty.channel.ChannelOption.ALLOCATOR;
 import static io.netty.channel.ChannelOption.CONNECT_TIMEOUT_MILLIS;
 import static io.opentelemetry.api.common.AttributeKey.stringKey;
 import static java.lang.Math.toIntExact;
@@ -162,48 +167,77 @@ public class NettyHttpClient
         requireNonNull(requestFilters, "requestFilters is null");
         requireNonNull(httpStatusListeners, "httpStatusListeners is null");
 
-        this.eventLoop = new MultiThreadIoEventLoopGroup(NioIoHandler.newFactory());
-        this.client = HttpClient.create()
-            .option(CONNECT_TIMEOUT_MILLIS, toIntExact(config.getConnectTimeout().toMillis()))
-            .runOn(eventLoop)
-            .doOnConnected(conn -> conn
-                    .addHandlerLast(new ReadTimeoutHandler(toIntExact(config.getIdleTimeout().toMillis())))
-                    .addHandlerLast(new WriteTimeoutHandler(toIntExact(config.getIdleTimeout().toMillis()))))
-            .doOnResponse((response, _) -> {
-                for (HttpStatusListener httpStatusListener : httpStatusListeners) {
-                    httpStatusListener.statusReceived(response.status().code());
-                }
-            })
-            .secure(spec -> spec.sslContext(maybeSslContext.orElseGet(() -> getSslContextFactory(config, environment)))
-                .handlerConfigurator(sslHandler -> {
-                    SSLEngine engine = sslHandler.engine();
-                    SSLParameters params = engine.getSSLParameters();
-                    params.setServerNames(getSniServerNames(engine, params.getServerNames()));
-                    engine.setSSLParameters(params);
-                }))
-            .proxy(proxyOptions -> {
-                if (config.getHttpProxy() != null) {
+        this.eventLoop = new MultiThreadIoEventLoopGroup(config.getMaxThreads(), daemonThreadsNamed("http-client-" + name + "-%s"), NioIoHandler.newFactory());
+        this.client = httpClientBuilder()
+                .configure(configureProxy(config))
+                .configure(configureSSL(config, maybeSslContext.orElseGet(() -> getSslContextFactory(config, environment))))
+                .configure(configureTimeouts(config))
+                .configure(configureStatusListeners(httpStatusListeners))
+                .configure(configureEventLoop(eventLoop))
+                .build();
+        this.idleTimeout = config.getIdleTimeout().toJavaTime();
+        this.requestFilters = ImmutableList.copyOf(requestFilters);
+    }
+
+    private HttpClientConfigurer configureEventLoop(EventLoopGroup eventLoop)
+    {
+        return client -> client
+                .runOn(eventLoop)
+                .option(ALLOCATOR, PooledByteBufAllocator.DEFAULT);
+    }
+
+    private HttpClientConfigurer configureStatusListeners(Iterable<? extends HttpStatusListener> httpStatusListeners)
+    {
+        return client -> client.doOnResponse((response, _) -> {
+            for (HttpStatusListener httpStatusListener : httpStatusListeners) {
+                httpStatusListener.statusReceived(response.status().code());
+            }
+        });
+    }
+
+    private static HttpClientConfigurer configureProxy(HttpClientConfig config)
+    {
+        return client -> {
+            if (config.getHttpProxy() != null) {
+                return client.proxy(proxyOptions -> {
                     ProxyProvider.Builder builder = proxyOptions.type(HTTP)
                             .host(config.getHttpProxy().getHost())
                             .port(config.getHttpProxy().getPort());
                     config.getHttpProxyPassword().ifPresent(builder::username);
                     config.getHttpProxyPassword().ifPresent(password -> builder.password(_ -> password));
-                }
-                if (config.getSocksProxy() != null) {
+                });
+            }
+            if (config.getSocksProxy() != null) {
+                return client.proxy(proxyOptions -> {
                     ProxyProvider.Builder builder = proxyOptions.type(SOCKS4)
                             .host(config.getSocksProxy().getHost())
                             .port(config.getSocksProxy().getPort());
                     config.getHttpProxyUser().ifPresent(builder::username);
                     config.getHttpProxyPassword().ifPresent(password -> builder.password(_ -> password));
-                }
-            });
+                });
+            }
+            return client.noProxy();
+        };
+    }
 
-        if (config.getHttpProxy() == null && config.getSocksProxy() == null) {
-            client = client.noProxy();
-        }
+    private static HttpClientConfigurer configureTimeouts(HttpClientConfig config)
+    {
+        return client -> client
+                .option(CONNECT_TIMEOUT_MILLIS, toIntExact(config.getConnectTimeout().toMillis()))
+                .doOnConnected(conn -> conn
+                    .addHandlerLast(new ReadTimeoutHandler(toIntExact(config.getIdleTimeout().toMillis())))
+                    .addHandlerLast(new WriteTimeoutHandler(toIntExact(config.getIdleTimeout().toMillis()))));
+    }
 
-        this.idleTimeout = config.getIdleTimeout().toJavaTime();
-        this.requestFilters = ImmutableList.copyOf(requestFilters);
+    private static HttpClientConfigurer configureSSL(HttpClientConfig config, SslContext sslContext)
+    {
+        return client -> client.secure(spec -> spec.sslContext(sslContext)
+                .handlerConfigurator(sslHandler -> {
+                    SSLEngine engine = sslHandler.engine();
+                    SSLParameters params = engine.getSSLParameters();
+                    params.setServerNames(getSniServerNames(engine, params.getServerNames()));
+                    engine.setSSLParameters(params);
+                }));
     }
 
     private SslContext getSslContextFactory(HttpClientConfig config, Optional<String> environment)
@@ -283,7 +317,7 @@ public class NettyHttpClient
 
     private <T, E extends Exception> HttpResponseFuture<T> sendRequest(Request request, ResponseHandler<T, E> responseHandler)
     {
-        NettyResponseFuture<T, E> nettyFuture = new NettyResponseFuture<>();
+        NettyResponseFuture<T, E> nettyFuture = new NettyResponseFuture<>(request.getUri());
         try {
             request = applyRequestFilters(request);
         }
@@ -299,23 +333,26 @@ public class NettyHttpClient
         request = injectTracing(request, span);
         final Request finalRequest = request;
         Disposable subscription = sendRequest(request, nettyFuture)
-                .response((HttpClientResponse clientResponse, ByteBufFlux content) -> content.aggregate().asInputStream().defaultIfEmpty(new ByteArrayInputStream(new byte[0])).flatMap(inputStream -> {
+                .responseSingle((HttpClientResponse clientResponse, ByteBufMono content) -> Mono.just(clientResponse).zipWith(orElseEmpty(content)))
+                .subscribe(tuple -> {
                     try {
                         // record attributes
-                        span.setAttribute(HttpAttributes.HTTP_RESPONSE_STATUS_CODE, clientResponse.status().code());
+                        span.setAttribute(HttpAttributes.HTTP_RESPONSE_STATUS_CODE, tuple.getT1().status().code());
 
                         // negotiated http version
                         span.setAttribute(NetworkAttributes.NETWORK_PROTOCOL_NAME, "HTTP"); // https://osi-model.com/application-layer/
-                        span.setAttribute(NetworkAttributes.NETWORK_PROTOCOL_VERSION, getHttpVersion(clientResponse.version()));
+                        span.setAttribute(NetworkAttributes.NETWORK_PROTOCOL_VERSION, getHttpVersion(tuple.getT1().version()));
 
-                        T response = responseHandler.handle(finalRequest, new NettyResponse(clientResponse, inputStream));
-                        return Mono.just(response);
+                        try (var _ = tuple.getT2()) {
+                            NettyResponse nettyResponse = new NettyResponse(tuple.getT1(), tuple.getT2());
+                            nettyFuture.setValue(responseHandler.handle(finalRequest, nettyResponse));
+                            span.setAttribute(HttpIncubatingAttributes.HTTP_RESPONSE_BODY_SIZE, nettyResponse.getBytesRead());
+                        }
                     }
                     catch (Exception exception) {
-                        return Mono.error(exception);
+                        nettyFuture.setException(exception);
                     }
-                }))
-                .subscribe(nettyFuture::setValue, nettyFuture::setException);
+                }, nettyFuture::setException);
 
         addCallback(nettyFuture, new FutureCallback<>() {
             @Override
@@ -336,6 +373,13 @@ public class NettyHttpClient
         }, directExecutor());
 
         return nettyFuture;
+    }
+
+    private static Mono<InputStream> orElseEmpty(ByteBufMono content)
+    {
+        return content
+                .asInputStream()
+                .switchIfEmpty(Mono.defer(() -> Mono.just(new ByteArrayInputStream(new byte[0]))));
     }
 
     private String getHttpVersion(io.netty.handler.codec.http.HttpVersion version)
@@ -388,8 +432,7 @@ public class NettyHttpClient
     {
         return switch (httpVersion) {
             case HTTP_1 -> new HttpProtocol[ ]{HttpProtocol.HTTP11};
-            case HTTP_2 -> new HttpProtocol[] {HttpProtocol.H2, HttpProtocol.H2C, HttpProtocol.HTTP11};
-            case HTTP_3 -> new HttpProtocol[] {HttpProtocol.HTTP3, HttpProtocol.H2, HttpProtocol.H2C, HttpProtocol.HTTP11};
+            case HTTP_2, HTTP_3 -> new HttpProtocol[] {HttpProtocol.H2, HttpProtocol.H2C, HttpProtocol.HTTP11};
         };
     }
 
@@ -417,8 +460,10 @@ public class NettyHttpClient
             default -> throw new IllegalArgumentException("Unsupported BodyGenerator type: " + bodyGenerator.getClass().getName());
         };
 
+        ByteBuffer byteBuffer = ByteBuffer.allocate(CHUNK_SIZE);
+
         return Flux.generate(
-            () -> ByteBuffer.allocate(CHUNK_SIZE),
+            () -> byteBuffer,
             (buffer, sink) -> {
                 try {
                     buffer.clear();
@@ -600,5 +645,37 @@ public class NettyHttpClient
             throws E
     {
         throw (E) e;
+    }
+
+    public static class HttpClientBuilder
+    {
+        private HttpClient client;
+
+        private HttpClientBuilder(HttpClient client)
+        {
+            this.client = requireNonNull(client, "client is null");
+        }
+
+        public HttpClientBuilder configure(HttpClientConfigurer configurer)
+        {
+            this.client = configurer.configure(client);
+            return this;
+        }
+
+        public static HttpClientBuilder httpClientBuilder()
+        {
+            return new HttpClientBuilder(HttpClient.create());
+        }
+
+        public HttpClient build()
+        {
+            return client;
+        }
+    }
+
+    @FunctionalInterface
+    interface HttpClientConfigurer
+    {
+        HttpClient configure(HttpClient client);
     }
 }

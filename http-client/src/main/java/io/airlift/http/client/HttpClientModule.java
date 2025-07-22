@@ -77,6 +77,9 @@ public class HttpClientModule
         newOptionalBinder(binder, SslContextFactory.Client.class);
         newOptionalBinder(binder, Key.get(SslContextFactory.Client.class, annotation));
 
+        newOptionalBinder(binder, SslContext.class);
+        newOptionalBinder(binder, Key.get(SslContext.class, annotation));
+
         // bind the client
         binder.bind(HttpClient.class).annotatedWith(annotation).toProvider(new HttpClientProvider(name, annotation)).in(Scopes.SINGLETON);
 
